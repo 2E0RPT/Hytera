@@ -1,0 +1,132 @@
+# Hytera RD985 — SNMP Protocol Reference
+
+Everything confirmed working so far. Source of truth throughout: the actual
+`HYTERA-REPEATER-MIB` file plus live testing against the real repeater via
+iReasoning MIB Browser — nothing here is guesswork.
+
+## Basics
+
+- **Protocol:** SNMPv1 (not v2c, not v3)
+- **Port:** 161 (standard SNMP agent port)
+- **Community string:** `public` — for **both** read *and* write. Confirmed
+  directly in the MIB's own header comment, and confirmed working for a real
+  SetRequest (reboot) and GetRequests (telemetry). Worth knowing this repeater
+  has essentially no SNMP access control if it's ever reachable beyond a
+  trusted LAN.
+- **Enterprise OID base:** `.1.3.6.1.4.1.40297` (Hytera's IANA enterprise number)
+
+## MIB structure
+
+```
+.1.3.6.1.4.1.40297
+  .1.2.1  rptRealTimeInfo
+    .1.2.1.1.<n>  rptAlarmInfo  (branch = 1)
+    .1.2.1.2.<n>  rptDataInfo   (branch = 2)
+  .1.2.2  rptControl
+    .1.2.2.<n>    (items live directly here, no branch split)
+```
+
+Every object below is a **scalar**, so the real OID on the wire always ends
+in `.0`.
+
+## Confirmed OIDs
+
+| Object | OID | Type | Notes |
+|---|---|---|---|
+| `rptRestart` | `.1.2.2.1.0` | INTEGER(0-1) | read-write. 1 = reset. **Confirmed: actually reboots the repeater.** |
+| `rptVoltage` | `.1.2.1.2.1.0` | OCTET STRING(4) float | Volts |
+| `rptVoltageAlarm` | `.1.2.1.1.1.0` | INTEGER(0-2) | 0=normal, 1=low, 2=high |
+| `rptPaTemprature` | `.1.2.1.2.2.0` | OCTET STRING(4) float | Celsius |
+| `rptTemperatureAlarm` | `.1.2.1.1.2.0` | INTEGER(0-2) | 0=normal, 1=low, 2=high. **Named generically, not "rptPaTempratureAlarm"** |
+| `rptFanSpeed` | `.1.2.1.2.3.0` | INTEGER | **"not supported yet" per Hytera's own MIB** |
+| `rptFanAlarm` | `.1.2.1.1.3.0` | INTEGER(0-1) | **also "not supported yet"** |
+| `rptVswr` | `.1.2.1.2.4.0` | OCTET STRING(4) float | |
+| `rptVswrAlarm` | `.1.2.1.1.6.0` | INTEGER(0-1) | 0=normal, 1=alarm |
+| `rptBatteryVoltage` | `.1.2.1.2.13.0` | OCTET STRING(4) float | **"not supported yet"** |
+| `rptBatteryVoltageAlarm` | `.1.2.1.1.9.0` | INTEGER(0-1) | **NOT marked unsupported**, unlike the raw voltage above |
+| `rptSlot1Rssi` | `.1.2.1.2.9.0` | INTEGER | dB |
+| `rptSlot2Rssi` | `.1.2.1.2.10.0` | INTEGER | dB, digital mode only |
+
+(prefix `.1.3.6.1.4.1.40297` omitted from the OID column above for brevity)
+
+## The float format
+
+The 4-byte OCTET STRING "float" fields are raw **32-bit IEEE-754, little-endian**.
+Confirmed by decoding a real `rptPaTemprature` capture: wire bytes
+`0x00 0x00 0xD8 0x41`, reversed → `0x41D80000` → **27.0**, a plausible PA
+temperature.
+
+On a little-endian host (Windows x86/x64), this means: **no byte-swapping
+needed** — `memcpy()` the 4 raw wire bytes straight into a C `float`.
+
+## BER/ASN.1 encoding cheat sheet
+
+- Leading OID byte `0x2B` = arcs "1.3" combined (standard rule: `40*X+Y`)
+- Enterprise arc `40297` in base-128 = `0x82 0xBA 0x69`
+- Common prefix for every `rptRealTimeInfo` object (after the `0x2B`):
+  `06 01 04 01 82 BA 69 01 02 01` (arcs `6,1,4,1,40297,1,2,1`) — then append
+  1 byte branch (1=alarm, 2=data), 1 byte item index, 1 byte `0x00` (instance)
+- Common prefix for `rptControl` objects (one level shallower):
+  `06 01 04 01 82 BA 69 01 02` — then item index byte, then `0x00`
+- Full `rptRestart` OID TLV: `06 0D 2B 06 01 04 01 82 BA 69 01 02 02 01 00`
+- Full `rptRealTimeInfo` object OID TLV: `06 0E 2B 06 01 04 01 82 BA 69 01 02 01 <branch> <item> 00`
+
+### Confirmed working SetRequest packet (rptRestart = 1)
+
+46 bytes total, hex:
+```
+30 2C 02 01 00 04 06 70 75 62 6C 69 63 A3 1F 02 01 01
+02 01 00 02 01 00 30 14 30 12 06 0D 2B 06 01 04 01 82
+BA 69 01 02 02 01 00 02 01 01
+```
+
+Structure: outer `SEQUENCE`(len 44) → version `INTEGER=0` → community
+`OCTET STRING "public"` → SetRequest-PDU (tag `0xA3`, len 31) → request-id,
+error-status, error-index (all `INTEGER`) → variable-bindings `SEQUENCE`
+(len 20) → one VarBind `SEQUENCE` (len 18) = OID (16 bytes) + `INTEGER=1`
+(3 bytes).
+
+### GetRequest/GetResponse (telemetry)
+
+Hand-typing a multi-OID request isn't practical — nested lengths exceed 127
+bytes and need long-form BER length encoding at several levels. Built generic
+helpers instead:
+- **Encoding:** `ber_write_length()`, `ber_append_tlv()`
+- **Decoding:** `ber_read_tlv()`, `ber_decode_integer()`
+
+Key facts:
+- GetRequest-PDU tag = `0xA0`; expect `0xA2` (GetResponse-PDU) back
+- SNMP agents echo varbinds back **in request order** — match response
+  values to OIDs by position, no need to re-parse the returned OID
+
+## Practical gotchas
+
+- iReasoning MIB Browser was the ground-truth tool throughout — always
+  confirmed a value/OID/behavior there *before* writing code against it.
+- `public`/`public` read-write community is wide open — no real access
+  control on this device.
+- (Unrelated to SNMP itself, but bit the project during this work: Windows
+  Firewall silently blocks inbound UDP for any newly-compiled/renamed `.exe`
+  — outbound is allowed by default, so TX-type traffic works while RX-type
+  traffic silently fails until the exe is allowed through.)
+
+## Why reboot control was wanted at all
+
+If the client software restarts without the repeater restarting, the
+repeater retains its old RCP/RTP UDP sequence-number state while the
+software resets to 0 — the repeater then ignores traffic until the
+software's sequence numbers catch back up. SNMP `rptRestart` is the clean,
+documented fix for this, replacing an earlier unverified "stop the
+watchdog" magic packet (`0x32 0x42 0xAB 0xBA 0x00 0x00`, reportedly leaked
+from Hytera's API/ADK) that worked but was never fully understood.
+
+## Where things stand
+
+- Reboot (`rptRestart`) — implemented and confirmed working, in
+  `HyteraTransceiver` (Esc-triggered, with Y/N confirmation).
+- Telemetry (9 OIDs above) — implemented and working, but pulled out into
+  a **separate standalone program, `HyteraConsole`**, so its
+  auto-refreshing display doesn't clutter the transceiver's own console.
+- **Next planned step:** turn `HyteraConsole` into a graphical Win32 window
+  with a custom analog-meter backdrop image and hand-drawn rotated needles,
+  instead of text output. Not yet built.
