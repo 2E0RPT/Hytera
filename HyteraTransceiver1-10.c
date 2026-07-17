@@ -750,8 +750,7 @@ int main(int argc, char *argv[]) {
     sender_thread_ctx_t sender_ctx = { rtp_sock, &remote_rtp_addr };
     HANDLE hSenderThread = CreateThread(NULL, 0, AudioSenderThread, &sender_ctx, 0, NULL);
 
-    printf("[PTT] Ready. Hold SPACE to transmit, release to stop. Press ESC to quit.\n");
-    printf("[PTT] Use LEFT/RIGHT keys to adjust TX (microphone) volume.\n");
+    printf("[PTT] Ready. Toggle Caps Lock on to transmit, Toggle Caps Lock off stop. Press ESC to quit.\n");
 
     int wasKeyed = 0;
     while (1) {
