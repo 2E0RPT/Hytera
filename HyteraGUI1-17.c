@@ -645,7 +645,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     AdjustWindowRectEx(&wr, winStyle, TRUE /* has a menu */, 0);
     int windowWidth = wr.right - wr.left;
 
-    HWND hwnd = CreateWindowExA(0, "HyteraHardwarePanelClass", "Hytera Telemetry System Hardware Deck",
+    HWND hwnd = CreateWindowExA(0, "HyteraHardwarePanelClass", "Hytera Telemetry GUI by Rob Thompson 2E0RPT.",
                                 winStyle | WS_VISIBLE,
                                 CW_USEDEFAULT, CW_USEDEFAULT, windowWidth, 320, NULL, NULL, hInstance, NULL);
     if (!hwnd) return -1;
