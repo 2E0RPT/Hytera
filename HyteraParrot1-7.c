@@ -531,7 +531,7 @@ void play_back_capture(SOCKET rcp_sock, SOCKET rtp_sock, struct sockaddr_in* rem
 
     printf("[RCP] PTT De-Key (playback finished)...\n");
     send_ptt_command(rcp_sock, remote_rcp_addr, 0);
-    printf("[SYSTEM] Playback complete. Listening for the next transmission...\n");
+    printf("[SYSTEM] Playback complete. Listening for the next transmission...\n\n");
 }
 
 int main(int argc, char *argv[]) {
