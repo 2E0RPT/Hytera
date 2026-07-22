@@ -1,3 +1,61 @@
+/*******************************************************************************
+ * TECHNICAL REFERENCE NOTES: libgsm_frn.dll IMPLEMENTATION & ROUTING WRAPPER   *
+ *******************************************************************************
+ *
+ * 1. BINARY ORIGIN & TOOLING WORKAROUNDS
+ * =============================================================================
+ * - Origin: The file libgsm_frn.dll is a 32-bit (x86) library extracted from 
+ *   the alternative Java FRN Client subsystem. It is a custom compilation of 
+ *   Jutta Degener and Carsten Bormann's open-source GSM 06.10 audio codec 
+ *   (1992–1994, Technische Universitaet Berlin).
+ *
+ * - Architecture Constraints: Because it is an x86 binary bound to the 2010 
+ *   MSVC runtime (MSVCR100.dll), the custom application must be compiled with 
+ *   the -m32 flag when using GCC/MinGW-w64. Mixing a 64-bit host program with 
+ *   this 32-bit DLL will fail with Windows System Error Code 193.
+ *
+ * - Symbol Extraction: When standard GNU binutils like gendef are missing from 
+ *   an environment, PowerShell's pipeline parsing string data can successfully 
+ *   expose the exact exported codec functions:
+ *   Get-Content -Encoding Ascii ... | Select-String
+ *
+ * 2. AUDIO PIPELINE & TIMING CONSTRAINTS
+ * =============================================================================
+ * - Frame Physics: The underlying library executes standard GSM 06.10 encoding. 
+ *   It strictly demands input audio chunks formatted to 8000 Hz, 16-bit Mono 
+ *   linear PCM.
+ *
+ * - Buffer Layout Constraints: Each standard frame consumes exactly 160 samples 
+ *   (320 bytes) of raw audio and generates an output frame of exactly 33 bytes.
+ *
+ * - The Hardware Overhead Problem: Interfacing Windows Multimedia (waveIn/waveOut) 
+ *   directly at 20ms boundaries (160 samples) triggers severe audio gating 
+ *   and choppiness. This is due to OS overhead when scheduling micro-buffers 
+ *   rapidly.
+ *
+ * - The Bundling Solution: Increasing the hardware window to 80ms blocks (by 
+ *   bundling 4 GSM frames sequentially into single arrays of 1280 bytes PCM 
+ *   / 132 bytes network payloads) completely bypasses Windows driver lag, 
+ *   achieving clear, continuous audio streaming.
+ *
+ * 3. ASYNCHRONOUS LOOP & MULTICAST ROUTING BEHAVIORS
+ * =============================================================================
+ * - Dual-Thread Isolation: Real-time streaming requires complete isolation. 
+ *   The primary thread polls the user's keyboard state for Push-To-Talk (PTT), 
+ *   while a dedicated background thread (receive_thread) runs an unblocked 
+ *   network capture line to keep audio processing smooth.
+ *
+ * - Multi-Instance Network Coexistence: Enabling SO_REUSEADDR allows multiple 
+ *   separate executables to capture port 10024 on the same computer. However, 
+ *   cross-device traffic to separate hardware (like a laptop) remains fragile 
+ *   if bound strictly to local loopback ranges.
+ *
+ * - Binding Topography: Binding network sockets globally to INADDR_ANY allows 
+ *   the Windows socket layer to route data cleanly over any connected ethernet 
+ *   or Wi-Fi network interface card (NIC). This handles internal multi-instance 
+ *   loops and remote networks simultaneously without dropped packets.
+ *
+ *******************************************************************************/
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -256,7 +314,8 @@ int main(int argc, char* argv[]) {
     _beginthread(transmit_thread, 0, NULL);
 
     printf("==================================================\n");
-    printf("   FRN CODEC MULTICAST PTT SERVICE ACTIVE         \n");
+    printf("|  FRN CODEC MULTICAST PTT SERVICE ACTIVE        |\n");
+	printf("|            Writen by Rob 2E0RPT.               |\n");
     printf("==================================================\n");
     printf(" -> Multicast Group: %s:%d\n", MULTICAST_IP, MULTICAST_PORT);
     
